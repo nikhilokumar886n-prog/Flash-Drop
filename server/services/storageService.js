@@ -8,9 +8,12 @@ const unlink = promisify(fs.unlink);
 const rmdir = promisify(fs.rm);
 const stat = promisify(fs.stat);
 
-// Ensure base uploads directory exists
-if (!fs.existsSync(config.uploadDir)) {
-  fs.mkdirSync(config.uploadDir, { recursive: true });
+try {
+  if (!fs.existsSync(config.uploadDir)) {
+    fs.mkdirSync(config.uploadDir, { recursive: true });
+  }
+} catch (err) {
+  console.warn('Storage dir warning:', err.message);
 }
 
 export const storageService = {

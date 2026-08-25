@@ -54,7 +54,7 @@ app.get('/api/health', (req, res) => {
 // API Routes
 app.use('/api/shares', shareRoutes);
 
-// Production client static assets serving
+// Production client static assets serving (for standalone local execution)
 const clientDistPath = path.resolve(__dirname, '../client/dist');
 app.use(express.static(clientDistPath));
 
@@ -136,8 +136,9 @@ export async function startServer() {
   }
 }
 
-// Only start standalone server when executed directly (not when imported as a serverless module)
-if (!process.env.VERCEL) {
+// Never run app.listen() inside Vercel serverless functions
+const isVercelServerless = Boolean(process.env.VERCEL || process.env.NOW_REGION || process.env.AWS_LAMBDA_FUNCTION_NAME);
+if (!isVercelServerless && process.argv[1] && process.argv[1].includes('server.js')) {
   startServer();
 }
 

@@ -8,7 +8,10 @@ const __dirname = path.dirname(__filename);
 // Load .env
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
+const isVercel = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+
 export const config = {
+  isVercel,
   port: parseInt(process.env.PORT || '5001', 10),
   nodeEnv: process.env.NODE_ENV || 'development',
   clientUrl: process.env.CLIENT_URL || 'http://localhost:5001',
@@ -25,9 +28,9 @@ export const config = {
   uploadRateLimitWindowMinutes: parseInt(process.env.UPLOAD_RATE_LIMIT_WINDOW_MINUTES || '15', 10),
   uploadRateLimitMax: parseInt(process.env.UPLOAD_RATE_LIMIT_MAX || '30', 10),
   
-  // Storage
+  // Storage (Use /tmp/uploads on Vercel serverless environment)
   storageType: process.env.STORAGE_TYPE || 'local',
-  uploadDir: path.resolve(__dirname, '../../uploads'),
+  uploadDir: isVercel ? '/tmp/uploads' : path.resolve(__dirname, '../../uploads'),
   
   // Optional S3 configuration
   s3: {
