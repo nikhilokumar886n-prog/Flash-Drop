@@ -2,17 +2,11 @@
 node_modules/
 **/node_modules/
 
-# Environment Variables & Secrets (Ignore all .env files anywhere in any directory)
+# Environment Variables & Configs (Strictly ignore all .env files)
 .env
 .env*
-**/.env
 **/.env*
-**/.env.*
-# But track example templates for setup
-!.env.example
-!**/.env.example
-!.env.template
-!**/.env.template
+*.env*
 
 # User Uploaded Storage (Keep directory, ignore contents)
 uploads/*
