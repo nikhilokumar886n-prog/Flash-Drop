@@ -1,0 +1,60 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Environment Variables & Secrets (Ignore all .env files anywhere in any directory)
+.env
+.env*
+**/.env
+**/.env*
+**/.env.*
+# But track example templates for setup
+!.env.example
+!**/.env.example
+!.env.template
+!**/.env.template
+
+# User Uploaded Storage (Keep directory, ignore contents)
+uploads/*
+!uploads/.gitkeep
+**/uploads/*
+!**/uploads/.gitkeep
+
+# Database Files & SQLite Journals
+data/
+**/data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Production Build Output
+client/dist/
+dist/
+**/dist/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS & Editor Files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Temporary / Cache Files
+.cache/
+.tmp/
+.temp/
+.tempmediaStorage/

@@ -1,0 +1,40 @@
+{
+  "name": "flashdrop",
+  "version": "1.0.0",
+  "description": "FlashDrop - Temporary, privacy-first file sharing platform with 6-digit codes and QR sharing",
+  "private": true,
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "dev": "nodemon server.js",
+    "start": "node server.js",
+    "build": "cd client && npm install && npm run build",
+    "vercel-build": "cd client && npm install && npm run build"
+  },
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "mime-types": "^2.1.35",
+    "multer": "^1.4.5-lts.1",
+    "pg": "^8.13.3",
+    "qrcode": "^1.5.4",
+    "sqlite3": "^5.1.7",
+    "uuid": "^11.0.5"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "nodemon": "^3.1.9"
+  },
+  "keywords": [
+    "file-sharing",
+    "temporary-files",
+    "qr-code",
+    "privacy",
+    "postgresql"
+  ],
+  "author": "FlashDrop Team",
+  "license": "MIT"
+}
