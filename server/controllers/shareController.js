@@ -60,14 +60,20 @@ function getBaseUrl(req) {
  * Get base URL with local network IP for mobile QR scanning
  */
 function getNetworkBaseUrl(req) {
-  const lanIp = getNetworkIp();
-  if (lanIp) {
-    const host = req.get('host') || '';
-    const portMatch = host.match(/:(\d+)$/);
-    const port = portMatch ? portMatch[1] : (config.port || '5001');
-    const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
-    return `${protocol}://${lanIp}:${port}`;
+  const host = req.get('host') || '';
+  const isLocalHost = host.includes('localhost') || host.includes('127.0.0.1') || host.includes('0.0.0.0');
+
+  // Only use local LAN IP if running on localhost
+  if (isLocalHost) {
+    const lanIp = getNetworkIp();
+    if (lanIp) {
+      const portMatch = host.match(/:(\d+)$/);
+      const port = portMatch ? portMatch[1] : (config.port || '5001');
+      const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
+      return `${protocol}://${lanIp}:${port}`;
+    }
   }
+
   return getBaseUrl(req);
 }
 
@@ -105,35 +111,23 @@ export const shareController = {
       const manageKey = generateManageKey();
       const title = (req.body.title || '').trim().slice(0, 100) || null;
 
-      // Ensure storage directory exists
-      await storageService.ensureShareDir(shareId);
-
-      // Save files to disk and prepare DB file records
+      // Save files via storageService (Cloudinary or local storage)
       const fileRecords = [];
       for (const file of files) {
         const fileId = uuidv4();
         const originalName = sanitizeFilename(file.originalname);
-        const ext = path.extname(originalName);
-        const storedName = `${fileId}${ext}`;
-        const targetPath = storageService.getFilePath(shareId, storedName);
-
-        if (file.path) {
-          await fs.promises.rename(file.path, targetPath);
-        } else if (file.buffer) {
-          await fs.promises.writeFile(targetPath, file.buffer);
-        }
-
         const mimeType = file.mimetype || mime.lookup(originalName) || 'application/octet-stream';
-        const sizeBytes = file.size;
+
+        const saved = await storageService.saveFile(shareId, file, fileId);
 
         fileRecords.push({
           id: fileId,
           shareId,
           originalName,
-          storedName,
+          storedName: saved.storedName,
           mimeType,
-          sizeBytes,
-          storagePath: targetPath,
+          sizeBytes: saved.sizeBytes,
+          storagePath: saved.storagePath,
           createdAt: now
         });
       }
@@ -487,17 +481,12 @@ export const shareController = {
       }
 
       const file = await query.get(
-        `SELECT id, original_name, stored_name, mime_type, size_bytes FROM files WHERE id = ? AND share_id = ?`,
+        `SELECT id, original_name, stored_name, mime_type, size_bytes, storage_path FROM files WHERE id = ? AND share_id = ?`,
         [fileId, id]
       );
 
       if (!file) {
         return res.status(404).json({ error: 'File not found.' });
-      }
-
-      const filePath = storageService.getFilePath(id, file.stored_name);
-      if (!fs.existsSync(filePath)) {
-        return res.status(404).json({ error: 'File no longer exists in storage.' });
       }
 
       await query.run(
@@ -507,9 +496,11 @@ export const shareController = {
 
       res.setHeader('Content-Type', file.mime_type || 'application/octet-stream');
       res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.original_name)}"`);
-      res.setHeader('Content-Length', file.size_bytes);
+      if (file.size_bytes) {
+        res.setHeader('Content-Length', file.size_bytes);
+      }
 
-      const stream = fs.createReadStream(filePath);
+      const stream = await storageService.createReadStream(file.storage_path, file.stored_name);
       stream.pipe(res);
     } catch (err) {
       next(err);
@@ -534,7 +525,7 @@ export const shareController = {
       }
 
       const file = await query.get(
-        `SELECT id, original_name, stored_name, mime_type, size_bytes FROM files WHERE id = ? AND share_id = ?`,
+        `SELECT id, original_name, stored_name, mime_type, size_bytes, storage_path FROM files WHERE id = ? AND share_id = ?`,
         [fileId, id]
       );
 
@@ -542,16 +533,13 @@ export const shareController = {
         return res.status(404).json({ error: 'File not found.' });
       }
 
-      const filePath = storageService.getFilePath(id, file.stored_name);
-      if (!fs.existsSync(filePath)) {
-        return res.status(404).json({ error: 'File not found.' });
-      }
-
       res.setHeader('Content-Type', file.mime_type || 'application/octet-stream');
       res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.original_name)}"`);
-      res.setHeader('Content-Length', file.size_bytes);
+      if (file.size_bytes) {
+        res.setHeader('Content-Length', file.size_bytes);
+      }
 
-      const stream = fs.createReadStream(filePath);
+      const stream = await storageService.createReadStream(file.storage_path, file.stored_name);
       stream.pipe(res);
     } catch (err) {
       next(err);

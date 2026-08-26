@@ -28,10 +28,17 @@ export const config = {
   uploadRateLimitWindowMinutes: parseInt(process.env.UPLOAD_RATE_LIMIT_WINDOW_MINUTES || '15', 10),
   uploadRateLimitMax: parseInt(process.env.UPLOAD_RATE_LIMIT_MAX || '30', 10),
   
-  // Storage (Use /tmp/uploads on Vercel serverless environment)
-  storageType: process.env.STORAGE_TYPE || 'local',
+  // Storage Engine (Options: cloudinary | local | s3)
+  storageType: process.env.STORAGE_TYPE || (process.env.CLOUDINARY_CLOUD_NAME || isVercel ? 'cloudinary' : 'local'),
   uploadDir: isVercel ? '/tmp/uploads' : path.resolve(__dirname, '../../uploads'),
   
+  // Cloudinary configuration
+  cloudinary: {
+    cloudName: process.env.CLOUDINARY_CLOUD_NAME || 'irwsuoub',
+    apiKey: process.env.CLOUDINARY_API_KEY || '584624662632278',
+    apiSecret: process.env.CLOUDINARY_API_SECRET || 'B1Hc-sHAOhbhJCcVkN4e1c-0lKI',
+  },
+
   // Optional S3 configuration
   s3: {
     endpoint: process.env.S3_ENDPOINT,

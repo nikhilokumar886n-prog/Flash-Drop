@@ -6,22 +6,27 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-let connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL;
-if (connectionString && connectionString.includes('.c-3.')) {
-  connectionString = connectionString.replace('.c-3.', '.');
-}
+// Load .env
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
-let pgConfig;
-if (connectionString) {
-  pgConfig = {
-    connectionString,
-    ssl: connectionString.includes('localhost') ? false : { rejectUnauthorized: false },
-    max: 10,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 10000,
-  };
-} else {
-  pgConfig = {
+function createPool() {
+  const rawUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+
+  if (rawUrl) {
+    // Strip query parameters like channel_binding that can break node-postgres SSL handshake
+    const cleanUrl = rawUrl.split('?')[0];
+    const isLocal = cleanUrl.includes('localhost') || cleanUrl.includes('127.0.0.1');
+
+    return new pg.Pool({
+      connectionString: cleanUrl,
+      ssl: isLocal ? false : { rejectUnauthorized: false },
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000,
+    });
+  }
+
+  return new pg.Pool({
     user: process.env.PG_USER || 'postgres',
     host: process.env.PG_HOST || 'localhost',
     database: process.env.PG_DATABASE || 'FlashDrop',
@@ -30,10 +35,10 @@ if (connectionString) {
     max: 20,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 5000,
-  };
+  });
 }
 
-export let pool = new pg.Pool(pgConfig);
+export let pool = createPool();
 
 /**
  * Convert standard ? placeholders into PostgreSQL $1, $2, ... format
@@ -76,31 +81,33 @@ let dbInitialized = false;
 export async function initDatabase() {
   if (dbInitialized) return;
 
-  // Step 1: In local mode without DATABASE_URL, check if FlashDrop database exists, if not create it
-  if (!connectionString) {
+  const rawUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+
+  // Step 1: In local mode without DATABASE_URL, check if FlashDrop database exists
+  if (!rawUrl) {
     try {
       const adminClient = new pg.Client({
-        user: pgConfig.user,
-        host: pgConfig.host,
+        user: process.env.PG_USER || 'postgres',
+        host: process.env.PG_HOST || 'localhost',
         database: 'postgres',
-        password: pgConfig.password,
-        port: pgConfig.port,
+        password: process.env.PG_PASSWORD || 'Nikhil@2007',
+        port: parseInt(process.env.PG_PORT || '5432', 10),
       });
 
       await adminClient.connect();
       const checkDb = await adminClient.query(
         `SELECT 1 FROM pg_database WHERE datname = $1`,
-        [pgConfig.database]
+        ['FlashDrop']
       );
 
       if (checkDb.rowCount === 0) {
-        console.log(`📦 Database "${pgConfig.database}" not found. Creating PostgreSQL database...`);
-        await adminClient.query(`CREATE DATABASE "${pgConfig.database}"`);
-        console.log(`✅ PostgreSQL database "${pgConfig.database}" created.`);
+        console.log(`📦 Database "FlashDrop" not found. Creating PostgreSQL database...`);
+        await adminClient.query(`CREATE DATABASE "FlashDrop"`);
+        console.log(`✅ PostgreSQL database "FlashDrop" created.`);
       }
       await adminClient.end();
     } catch (err) {
-      console.log(`ℹ️ Postgres check: ${err.message}`);
+      console.log(`ℹ️ Postgres check note: ${err.message}`);
     }
   }
 

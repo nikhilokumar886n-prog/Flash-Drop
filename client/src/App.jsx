@@ -28,7 +28,7 @@ export function App() {
         const id = shareMatch[1];
         setActiveShareId(id);
 
-        const storedKey = keyParam || localStorage.getItem(`drop6_manage_${id}`);
+        const storedKey = keyParam || localStorage.getItem(`flashdrop_manage_${id}`) || localStorage.getItem(`drop6_manage_${id}`);
         if (storedKey) {
           try {
             const manageInfo = await api.getManageInfo(id, storedKey);
@@ -59,6 +59,7 @@ export function App() {
 
   const handleUploadSuccess = (data) => {
     if (data.shareId && data.manageKey) {
+      localStorage.setItem(`flashdrop_manage_${data.shareId}`, data.manageKey);
       localStorage.setItem(`drop6_manage_${data.shareId}`, data.manageKey);
     }
     setShareData(data);
@@ -142,7 +143,7 @@ export function App() {
 
         {view === 'recipient' && activeShareId && (
           <div>
-            {localStorage.getItem(`drop6_manage_${activeShareId}`) && (
+            {(localStorage.getItem(`flashdrop_manage_${activeShareId}`) || localStorage.getItem(`drop6_manage_${activeShareId}`)) && (
               <div style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'flex-end' }}>
                 <button
                   onClick={handleSwitchToSender}

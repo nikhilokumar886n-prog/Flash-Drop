@@ -5,9 +5,9 @@ import { storageService } from './storageService.js';
 /**
  * Stream a zip archive of all share files to response
  */
-export function streamZipArchive(share, files, res) {
+export async function streamZipArchive(share, files, res) {
   const archive = archiver('zip', {
-    zlib: { level: 6 } // Balanced compression
+    zlib: { level: 6 }
   });
 
   const zipName = `FlashDrop_${share.title ? share.title.replace(/[^a-zA-Z0-9_-]/g, '_') : 'Files'}_${share.access_code}.zip`;
@@ -24,12 +24,17 @@ export function streamZipArchive(share, files, res) {
 
   archive.pipe(res);
 
-  // Append each file to the archive
+  // Append each file (Cloudinary stream or local file)
   for (const file of files) {
     try {
-      const filePath = storageService.getFilePath(share.id, file.stored_name);
-      if (fs.existsSync(filePath)) {
-        archive.file(filePath, { name: file.original_name });
+      if (file.storage_path && (file.storage_path.startsWith('http://') || file.storage_path.startsWith('https://'))) {
+        const stream = await storageService.createReadStream(file.storage_path, file.stored_name);
+        archive.append(stream, { name: file.original_name });
+      } else {
+        const filePath = file.storage_path || storageService.getFilePath(share.id, file.stored_name);
+        if (fs.existsSync(filePath)) {
+          archive.file(filePath, { name: file.original_name });
+        }
       }
     } catch (err) {
       console.warn(`Could not add file ${file.original_name} to zip:`, err.message);
@@ -38,3 +43,5 @@ export function streamZipArchive(share, files, res) {
 
   archive.finalize();
 }
+
+export default streamZipArchive;

@@ -1,6 +1,9 @@
 import fs from 'fs';
 import path from 'path';
+import http from 'http';
+import https from 'https';
 import { promisify } from 'util';
+import { v2 as cloudinary } from 'cloudinary';
 import { config } from '../config/config.js';
 
 const mkdir = promisify(fs.mkdir);
@@ -8,24 +11,107 @@ const unlink = promisify(fs.unlink);
 const rmdir = promisify(fs.rm);
 const stat = promisify(fs.stat);
 
+// Configure Cloudinary if credentials exist
+const isCloudinaryActive = Boolean(
+  config.cloudinary.cloudName &&
+  config.cloudinary.apiKey &&
+  config.cloudinary.apiSecret
+);
+
+if (isCloudinaryActive) {
+  cloudinary.config({
+    cloud_name: config.cloudinary.cloudName,
+    api_key: config.cloudinary.apiKey,
+    api_secret: config.cloudinary.apiSecret,
+    secure: true,
+  });
+  console.log(`☁️ Cloudinary Storage Connected: cloud "${config.cloudinary.cloudName}"`);
+}
+
+// Ensure base uploads directory exists for local temp use
 try {
   if (!fs.existsSync(config.uploadDir)) {
     fs.mkdirSync(config.uploadDir, { recursive: true });
   }
 } catch (err) {
-  console.warn('Storage dir warning:', err.message);
+  console.warn('Storage dir note:', err.message);
 }
 
 export const storageService = {
+  isCloudinary() {
+    return isCloudinaryActive && (config.storageType === 'cloudinary' || config.isVercel);
+  },
+
   /**
-   * Get the directory for a specific share
+   * Save uploaded file either to Cloudinary or local storage
+   */
+  async saveFile(shareId, file, fileId) {
+    if (this.isCloudinary()) {
+      return new Promise((resolve, reject) => {
+        const uploadOptions = {
+          folder: `flashdrop/${shareId}`,
+          public_id: fileId,
+          resource_type: 'auto',
+          use_filename: false,
+          unique_filename: false,
+          overwrite: true
+        };
+
+        const handleResult = (error, result) => {
+          if (error) {
+            console.error('Cloudinary Upload Error:', error);
+            reject(new Error('Cloudinary upload failed: ' + error.message));
+          } else {
+            resolve({
+              storagePath: result.secure_url,
+              storedName: result.public_id,
+              sizeBytes: result.bytes || file.size,
+              format: result.format || ''
+            });
+          }
+        };
+
+        if (file.path && fs.existsSync(file.path)) {
+          cloudinary.uploader.upload(file.path, uploadOptions, handleResult);
+        } else if (file.buffer) {
+          const uploadStream = cloudinary.uploader.upload_stream(uploadOptions, handleResult);
+          uploadStream.end(file.buffer);
+        } else {
+          reject(new Error('No file buffer or path provided for upload.'));
+        }
+      });
+    }
+
+    // Local Disk Storage
+    await this.ensureShareDir(shareId);
+    const originalName = file.originalname || 'file';
+    const ext = path.extname(originalName);
+    const storedName = `${fileId}${ext}`;
+    const targetPath = this.getFilePath(shareId, storedName);
+
+    if (file.path && fs.existsSync(file.path)) {
+      await fs.promises.rename(file.path, targetPath);
+    } else if (file.buffer) {
+      await fs.promises.writeFile(targetPath, file.buffer);
+    }
+
+    return {
+      storagePath: targetPath,
+      storedName,
+      sizeBytes: file.size,
+      format: ext.replace('.', '')
+    };
+  },
+
+  /**
+   * Get the local directory for a specific share
    */
   getShareDir(shareId) {
     return path.join(config.uploadDir, shareId);
   },
 
   /**
-   * Ensure directory exists for a share
+   * Ensure directory exists for a share (local storage)
    */
   async ensureShareDir(shareId) {
     const shareDir = this.getShareDir(shareId);
@@ -36,13 +122,12 @@ export const storageService = {
   },
 
   /**
-   * Get safe absolute file path
+   * Get safe absolute file path (local storage)
    */
   getFilePath(shareId, storedName) {
     const shareDir = this.getShareDir(shareId);
     const resolvedPath = path.resolve(shareDir, storedName);
 
-    // Prevent directory traversal attacks
     if (!resolvedPath.startsWith(path.resolve(shareDir))) {
       throw new Error('Access denied: Invalid file path traversal.');
     }
@@ -50,40 +135,56 @@ export const storageService = {
   },
 
   /**
-   * Check if file exists on disk
+   * Get readable stream of a file (handles Cloudinary URL and local disk)
    */
-  async fileExists(shareId, storedName) {
-    try {
-      const filePath = this.getFilePath(shareId, storedName);
-      await stat(filePath);
-      return true;
-    } catch {
-      return false;
+  async createReadStream(storagePath, storedName) {
+    if (storagePath.startsWith('http://') || storagePath.startsWith('https://')) {
+      return new Promise((resolve, reject) => {
+        const client = storagePath.startsWith('https://') ? https : http;
+        client.get(storagePath, (res) => {
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(res);
+          } else {
+            reject(new Error(`Failed to fetch cloud file: HTTP ${res.statusCode}`));
+          }
+        }).on('error', reject);
+      });
     }
-  },
 
-  /**
-   * Get readable stream of a file
-   */
-  createReadStream(shareId, storedName) {
-    const filePath = this.getFilePath(shareId, storedName);
-    if (!fs.existsSync(filePath)) {
+    // Local file stream
+    if (!fs.existsSync(storagePath)) {
       throw new Error('File does not exist on storage.');
     }
-    return fs.createReadStream(filePath);
+    return fs.createReadStream(storagePath);
   },
 
   /**
    * Delete single file
    */
-  async deleteFile(shareId, storedName) {
+  async deleteFile(shareId, storedName, storagePath = '') {
+    if (this.isCloudinary() || storagePath.includes('cloudinary.com')) {
+      try {
+        const publicId = storedName.includes('/') ? storedName : `flashdrop/${shareId}/${storedName}`;
+        await cloudinary.uploader.destroy(publicId, { resource_type: 'image' });
+        await cloudinary.uploader.destroy(publicId, { resource_type: 'raw' });
+        await cloudinary.uploader.destroy(publicId, { resource_type: 'video' });
+      } catch (err) {
+        console.warn(`Cloudinary single delete warning (${storedName}):`, err.message);
+      }
+      return;
+    }
+
     try {
-      const filePath = this.getFilePath(shareId, storedName);
-      if (fs.existsSync(filePath)) {
-        await unlink(filePath);
+      if (storagePath && fs.existsSync(storagePath)) {
+        await unlink(storagePath);
+      } else {
+        const filePath = this.getFilePath(shareId, storedName);
+        if (fs.existsSync(filePath)) {
+          await unlink(filePath);
+        }
       }
     } catch (err) {
-      console.error(`Failed to delete file ${storedName} from share ${shareId}:`, err.message);
+      console.warn(`Local file delete error (${storedName}):`, err.message);
     }
   },
 
@@ -91,13 +192,29 @@ export const storageService = {
    * Delete entire share folder and all contained files
    */
   async deleteShareFiles(shareId) {
+    if (this.isCloudinary()) {
+      try {
+        const folderPrefix = `flashdrop/${shareId}`;
+        await cloudinary.api.delete_resources_by_prefix(folderPrefix, { resource_type: 'image' }).catch(() => {});
+        await cloudinary.api.delete_resources_by_prefix(folderPrefix, { resource_type: 'raw' }).catch(() => {});
+        await cloudinary.api.delete_resources_by_prefix(folderPrefix, { resource_type: 'video' }).catch(() => {});
+        await cloudinary.api.delete_folder(folderPrefix).catch(() => {});
+        console.log(`☁️ Cloudinary folder purged: ${folderPrefix}`);
+      } catch (err) {
+        console.warn(`Cloudinary folder purge warning for share ${shareId}:`, err.message);
+      }
+      return;
+    }
+
     try {
       const shareDir = this.getShareDir(shareId);
       if (fs.existsSync(shareDir)) {
         await rmdir(shareDir, { recursive: true, force: true });
       }
     } catch (err) {
-      console.error(`Failed to delete storage directory for share ${shareId}:`, err.message);
+      console.warn(`Failed to delete local storage directory for share ${shareId}:`, err.message);
     }
   }
 };
+
+export default storageService;
