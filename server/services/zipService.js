@@ -28,7 +28,7 @@ export async function streamZipArchive(share, files, res) {
   for (const file of files) {
     try {
       if (file.storage_path && (file.storage_path.startsWith('http://') || file.storage_path.startsWith('https://'))) {
-        const stream = await storageService.createReadStream(file.storage_path, file.stored_name);
+        const stream = await storageService.createReadStream(file.storage_path, file.stored_name, file.mime_type);
         archive.append(stream, { name: file.original_name });
       } else {
         const filePath = file.storage_path || storageService.getFilePath(share.id, file.stored_name);

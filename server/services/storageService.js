@@ -1,7 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import http from 'http';
-import https from 'https';
+import { Readable } from 'stream';
 import { promisify } from 'util';
 import { v2 as cloudinary } from 'cloudinary';
 import { config } from '../config/config.js';
@@ -9,7 +8,6 @@ import { config } from '../config/config.js';
 const mkdir = promisify(fs.mkdir);
 const unlink = promisify(fs.unlink);
 const rmdir = promisify(fs.rm);
-const stat = promisify(fs.stat);
 
 // Configure Cloudinary if credentials exist
 const isCloudinaryActive = Boolean(
@@ -37,23 +35,54 @@ try {
   console.warn('Storage dir note:', err.message);
 }
 
+function getResourceType(mimeType = '', ext = '') {
+  const cleanExt = ext.toLowerCase().replace('.', '');
+  if (mimeType.startsWith('image/') && !['svg', 'pdf'].includes(cleanExt)) {
+    return 'image';
+  }
+  if (mimeType.startsWith('video/') || mimeType.startsWith('audio/')) {
+    return 'video';
+  }
+  return 'raw';
+}
+
 export const storageService = {
   isCloudinary() {
     return isCloudinaryActive && (config.storageType === 'cloudinary' || config.isVercel);
   },
 
   /**
+   * Generate signed Cloudinary URL that bypasses 401 PDF/raw restrictions
+   */
+  getSignedUrl(publicId, resourceType = 'raw') {
+    try {
+      return cloudinary.utils.private_download_url(publicId, '', {
+        resource_type: resourceType,
+        type: 'upload',
+        expires_at: Math.floor(Date.now() / 1000) + 7200
+      });
+    } catch {
+      return null;
+    }
+  },
+
+  /**
    * Save uploaded file either to Cloudinary or local storage
    */
   async saveFile(shareId, file, fileId) {
+    const originalName = file.originalname || 'file';
+    const ext = path.extname(originalName);
+    const mimeType = file.mimetype || 'application/octet-stream';
+    const resourceType = getResourceType(mimeType, ext);
+    // For raw files (PDFs, docs), keep the extension so download signatures match
+    const storedPublicId = resourceType === 'raw' ? `${fileId}${ext}` : fileId;
+
     if (this.isCloudinary()) {
       return new Promise((resolve, reject) => {
         const uploadOptions = {
           folder: `flashdrop/${shareId}`,
-          public_id: fileId,
-          resource_type: 'auto',
-          use_filename: false,
-          unique_filename: false,
+          public_id: storedPublicId,
+          resource_type: resourceType,
           overwrite: true
         };
 
@@ -66,7 +95,8 @@ export const storageService = {
               storagePath: result.secure_url,
               storedName: result.public_id,
               sizeBytes: result.bytes || file.size,
-              format: result.format || ''
+              format: result.format || ext.replace('.', ''),
+              resourceType: result.resource_type || resourceType
             });
           }
         };
@@ -84,8 +114,6 @@ export const storageService = {
 
     // Local Disk Storage
     await this.ensureShareDir(shareId);
-    const originalName = file.originalname || 'file';
-    const ext = path.extname(originalName);
     const storedName = `${fileId}${ext}`;
     const targetPath = this.getFilePath(shareId, storedName);
 
@@ -99,20 +127,15 @@ export const storageService = {
       storagePath: targetPath,
       storedName,
       sizeBytes: file.size,
-      format: ext.replace('.', '')
+      format: ext.replace('.', ''),
+      resourceType: 'local'
     };
   },
 
-  /**
-   * Get the local directory for a specific share
-   */
   getShareDir(shareId) {
     return path.join(config.uploadDir, shareId);
   },
 
-  /**
-   * Ensure directory exists for a share (local storage)
-   */
   async ensureShareDir(shareId) {
     const shareDir = this.getShareDir(shareId);
     if (!fs.existsSync(shareDir)) {
@@ -121,9 +144,6 @@ export const storageService = {
     return shareDir;
   },
 
-  /**
-   * Get safe absolute file path (local storage)
-   */
   getFilePath(shareId, storedName) {
     const shareDir = this.getShareDir(shareId);
     const resolvedPath = path.resolve(shareDir, storedName);
@@ -135,20 +155,34 @@ export const storageService = {
   },
 
   /**
-   * Get readable stream of a file (handles Cloudinary URL and local disk)
+   * Get readable stream of a file (handles signed Cloudinary requests & local disk)
    */
-  async createReadStream(storagePath, storedName) {
-    if (storagePath.startsWith('http://') || storagePath.startsWith('https://')) {
-      return new Promise((resolve, reject) => {
-        const client = storagePath.startsWith('https://') ? https : http;
-        client.get(storagePath, (res) => {
-          if (res.statusCode >= 200 && res.statusCode < 300) {
-            resolve(res);
-          } else {
-            reject(new Error(`Failed to fetch cloud file: HTTP ${res.statusCode}`));
-          }
-        }).on('error', reject);
+  async createReadStream(storagePath, storedName, mimeType = '') {
+    if (this.isCloudinary() || storagePath.startsWith('http://') || storagePath.startsWith('https://')) {
+      const ext = path.extname(storedName || storagePath);
+      const resourceType = getResourceType(mimeType, ext);
+      
+      // Generate authenticated signed URL to bypass 401 delivery restrictions
+      let targetUrl = storedName ? this.getSignedUrl(storedName, resourceType) : null;
+      if (!targetUrl) {
+        targetUrl = storagePath;
+      }
+
+      let response = await fetch(targetUrl, {
+        headers: { 'Accept': '*/*' },
+        redirect: 'follow'
       });
+
+      // If raw failed, fallback to direct storage path
+      if (!response.ok && targetUrl !== storagePath) {
+        response = await fetch(storagePath, { redirect: 'follow' });
+      }
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch cloud file: HTTP ${response.status} ${response.statusText}`);
+      }
+
+      return Readable.fromWeb(response.body);
     }
 
     // Local file stream
@@ -165,8 +199,8 @@ export const storageService = {
     if (this.isCloudinary() || storagePath.includes('cloudinary.com')) {
       try {
         const publicId = storedName.includes('/') ? storedName : `flashdrop/${shareId}/${storedName}`;
-        await cloudinary.uploader.destroy(publicId, { resource_type: 'image' });
         await cloudinary.uploader.destroy(publicId, { resource_type: 'raw' });
+        await cloudinary.uploader.destroy(publicId, { resource_type: 'image' });
         await cloudinary.uploader.destroy(publicId, { resource_type: 'video' });
       } catch (err) {
         console.warn(`Cloudinary single delete warning (${storedName}):`, err.message);
@@ -195,8 +229,8 @@ export const storageService = {
     if (this.isCloudinary()) {
       try {
         const folderPrefix = `flashdrop/${shareId}`;
-        await cloudinary.api.delete_resources_by_prefix(folderPrefix, { resource_type: 'image' }).catch(() => {});
         await cloudinary.api.delete_resources_by_prefix(folderPrefix, { resource_type: 'raw' }).catch(() => {});
+        await cloudinary.api.delete_resources_by_prefix(folderPrefix, { resource_type: 'image' }).catch(() => {});
         await cloudinary.api.delete_resources_by_prefix(folderPrefix, { resource_type: 'video' }).catch(() => {});
         await cloudinary.api.delete_folder(folderPrefix).catch(() => {});
         console.log(`☁️ Cloudinary folder purged: ${folderPrefix}`);

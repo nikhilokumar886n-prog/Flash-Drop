@@ -496,11 +496,9 @@ export const shareController = {
 
       res.setHeader('Content-Type', file.mime_type || 'application/octet-stream');
       res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.original_name)}"`);
-      if (file.size_bytes) {
-        res.setHeader('Content-Length', file.size_bytes);
-      }
+      res.setHeader('Cache-Control', 'public, max-age=3600');
 
-      const stream = await storageService.createReadStream(file.storage_path, file.stored_name);
+      const stream = await storageService.createReadStream(file.storage_path, file.stored_name, file.mime_type);
       stream.pipe(res);
     } catch (err) {
       next(err);
@@ -535,11 +533,9 @@ export const shareController = {
 
       res.setHeader('Content-Type', file.mime_type || 'application/octet-stream');
       res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.original_name)}"`);
-      if (file.size_bytes) {
-        res.setHeader('Content-Length', file.size_bytes);
-      }
+      res.setHeader('Cache-Control', 'public, max-age=3600');
 
-      const stream = await storageService.createReadStream(file.storage_path, file.stored_name);
+      const stream = await storageService.createReadStream(file.storage_path, file.stored_name, file.mime_type);
       stream.pipe(res);
     } catch (err) {
       next(err);
